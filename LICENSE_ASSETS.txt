@@ -1,0 +1,8 @@
+# Asset Attribution & Credits
+
+All audio assets utilized in this project are licensed under Creative Commons Zero (CC0) public domain designations.
+
+## Audio Asset Ledger
+* **slice.mp3** - Source: [Pixabay Audio / FreeSound] (Universfield / https://cdn.pixabay.com/download/audio/2025/06/02/audio_58f7e1a157.mp3?filename=universfield-sword-blade-slicing-flesh-352708.mp3)
+* **frenzy.mp3** - Source: [Freesound.org / Audio / FreeSound] (Magic Fireflies by IENBA -- https://freesound.org/s/875330/ -- License: Creative Commons 0)
+* **explosion.mp3** - Source: [Pixabay Audio / FreeSound] (u_xg7ssi08yr /https://cdn.pixabay.com/download/audio/2025/07/29/audio_26fb9e5c42.mp3?filename=u_xg7ssi08yr-bomb-explosion-2-381970.mp3)

@@ -6,17 +6,21 @@ import 'package:flame/events.dart';
 import 'package:flame/components.dart';
 import 'package:flame/text.dart';
 import 'package:flame/timer.dart' as flame_timer; 
-import 'package:shared_preferences/shared_preferences.dart'; // Import local storage package
+import 'package:shared_preferences/shared_preferences.dart'; 
 import 'swipe_point.dart';
 import 'fruit_component.dart';
 import 'fruit_half_component.dart';
 import 'fruit_types.dart';
 import 'main_menu_screen.dart';
+import 'package:flame_audio/flame_audio.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  
+  // 1. Ensure your sound files are preloaded in your game initialization
+  await FlameAudio.audioCache.loadAll(['slice.mp3', 'frenzy.mp3', 'explosion.mp3']);
 
   runApp(
     const MaterialApp(
@@ -33,6 +37,7 @@ class FruitCutterGame extends FlameGame with PanDetector {
     ..style = PaintingStyle.stroke
     ..strokeCap = StrokeCap.round
     ..strokeJoin = StrokeJoin.round;
+    Sprite? _backgroundSprite;
 
   final int _trailDurationMs = 250;
   final Random _random = Random();
@@ -43,68 +48,103 @@ class FruitCutterGame extends FlameGame with PanDetector {
   int revivesUsed = 0; 
   final int maxRevives = 3; 
   bool isGameOver = false;
+  double _timeSinceLastBanana = 15.0;
+
+  // New Mechanics States
+  double _multiplierTimer = 0.0;
+  bool get isDoublePoints => _multiplierTimer > 0.0;
   
   late TextComponent _scoreText;
   late TextComponent _highScoreText;
+  late TextComponent _multiplierHUDText; // Visual timer layout for Double Points
 
-  @override
+    @override
   Future<void> onLoad() async {
     super.onLoad();
-    // 1. Load the permanently saved high score first before drawing the game
+    // Pre-cache the background image asset cleanly into memory
+    _backgroundSprite = await loadSprite('background.png');
     await _loadHighScore();
     _initGame(fullReset: true);
   }
 
-  /// Reads the device storage to retrieve the historical best score
   Future<void> _loadHighScore() async {
     final prefs = await SharedPreferences.getInstance();
-    // Retrieve the integer value stored under the key 'best_score' (defaults to 0 if empty)
     highScore = prefs.getInt('best_score') ?? 0;
   }
 
-  /// Writes a new personal best score securely onto local device memory
   Future<void> _saveHighScore(int newHigh) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('best_score', newHigh);
+  }
+  void _playSound(String filename) async {
+    final prefs = await SharedPreferences.getInstance();
+    bool soundEnabled = prefs.getBool('sound_enabled') ?? true;
+    if (soundEnabled) {
+      await FlameAudio.play(filename);
+    }
   }
 
   void _initGame({required bool fullReset}) {
     if (fullReset) {
       score = 0;
       revivesUsed = 0;
+      _multiplierTimer = 0.0;
     }
     isGameOver = false;
 
     double spawnInterval = score > 30 ? 1.0 : 1.5;
     _spawnTimer = flame_timer.Timer(spawnInterval, onTick: _spawnFruitGroup, repeat: true);
 
+        // --- SLEEK SCORE PANEL ---
     _scoreText = TextComponent(
       text: 'Score: $score',
-      position: Vector2(20, 40),
+      position: Vector2(24, 44),
       textRenderer: TextPaint(
         style: const TextStyle(
-          color: Color(0xFFFFEB3B),
-          fontSize: 26,
-          fontWeight: FontWeight.bold,
-          shadows: [Shadow(color: Colors.black, blurRadius: 4, offset: Offset(2, 2))],
+          color: Color(0xFFFFEB3B), // Bright Golden Yellow
+          fontSize: 28,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 1.5,
+          shadows: [
+            Shadow(color: Colors.black, blurRadius: 6, offset: Offset(2, 3)),
+          ],
         ),
       ),
     );
     add(_scoreText);
 
+    // --- SLEEK BEST SCORE PANEL ---
     _highScoreText = TextComponent(
       text: 'Best: $highScore',
-      position: Vector2(size.x - 140, 40),
+      position: Vector2(size.x - 170, 44),
       textRenderer: TextPaint(
         style: const TextStyle(
-          color: Color(0xFFFF5722),
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-          shadows: [Shadow(color: Colors.black, blurRadius: 4, offset: Offset(2, 2))],
+          color: Color(0xFF00E676), // Vibrant Neon Green to symbolize high scores!
+          fontSize: 24,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 1.2,
+          shadows: [
+            Shadow(color: Colors.black, blurRadius: 6, offset: Offset(2, 3)),
+          ],
         ),
       ),
     );
     add(_highScoreText);
+
+    // Multiplier Text HUD Setup
+    _multiplierHUDText = TextComponent(
+      text: '',
+      position: Vector2(20, 80),
+      textRenderer: TextPaint(
+        style: const TextStyle(
+          color: Color(0xFF00E676),
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          shadows: [Shadow(color: Colors.black, blurRadius: 4, offset: Offset(1, 1))],
+        ),
+      ),
+    );
+    add(_multiplierHUDText);
   }
 
   void triggerGameOver() {
@@ -142,23 +182,70 @@ class FruitCutterGame extends FlameGame with PanDetector {
     final int count = score > 25 ? (_random.nextInt(3) + 1) : (_random.nextInt(2) + 1);
     
     for (int i = 0; i < count; i++) {
-      final bool spawnBomb = _random.nextDouble() < 0.20;
-      final type = spawnBomb ? FruitType.bomb : FruitType.values[_random.nextInt(FruitType.values.length - 1)];
-
-      final xPosition = size.x * (0.2 + _random.nextDouble() * 0.6);
-      final yPosition = size.y + 40;
-      final double vx = (_random.nextDouble() * 140) - 70;
-      final double vy = -(_random.nextDouble() * 150 + 680); 
-
-      add(FruitComponent(type: type, position: Vector2(xPosition, yPosition), velocity: Vector2(vx, vy)));
+      _spawnSingleRandomItem();
     }
   }
 
-  @override
+    void _spawnSingleRandomItem({double speedModifier = 1.0}) {
+    final bool spawnBomb = _random.nextDouble() < 0.20;
+    
+    final playableTypes = FruitType.values.where((t) => t != FruitType.bomb).toList();
+    FruitType type = spawnBomb ? FruitType.bomb : playableTypes[_random.nextInt(playableTypes.length)];
+
+    // ENFORCE BANANA COOLDOWN
+    if (type == FruitType.banana) {
+      if (_timeSinceLastBanana < 15.0) {
+        // Fallback: turn it into a watermelon or apple if it's too early
+        type = _random.nextBool() ? FruitType.apple : FruitType.watermelon;
+      } else {
+        // Cooldown passed! Reset the tracking clock back to zero
+        _timeSinceLastBanana = 0.0;
+      }
+    }
+
+    final xPosition = size.x * (0.2 + _random.nextDouble() * 0.6);
+    final yPosition = size.y + 40;
+    final double vx = ((_random.nextDouble() * 140) - 70) * speedModifier;
+    final double vy = -(_random.nextDouble() * 150 + 680) * speedModifier; 
+
+    add(FruitComponent(
+      fruitType: type, 
+      position: Vector2(xPosition, yPosition), 
+      initialVelocity: Vector2(vx, vy),
+    ));
+  }
+
+  // Triggered via slicing a Banana
+  void triggerBananaFrenzy() {
+  _playSound('frenzy.mp3'); // Add this line right here!
+  int waveCount = 5;
+  
+  for (int i = 0; i < waveCount; i++) {
+    Future.delayed(Duration(milliseconds: i * 150), () { // Made delay slightly longer so they don't crowd the screen
+      if (!isGameOver) {
+        _spawnSingleRandomItem(speedModifier: 0.85);
+      }
+    });
+  }
+}
+
+     @override
   void update(double dt) {
     super.update(dt);
     _spawnTimer.update(dt);
     
+    // This line ticks the timer forward and uses the field
+    _timeSinceLastBanana += dt;
+
+    if (_multiplierTimer > 0.0) {
+      _multiplierTimer -= dt;
+      if (_multiplierTimer <= 0.0) {
+        _multiplierHUDText.text = '';
+      } else {
+        _multiplierHUDText.text = '2X POINTS: ${_multiplierTimer.toStringAsFixed(1)}s';
+      }
+    }
+
     final now = DateTime.now();
     _swipePoints.removeWhere((point) => now.difference(point.timestamp).inMilliseconds > _trailDurationMs);
   }
@@ -189,7 +276,9 @@ class FruitCutterGame extends FlameGame with PanDetector {
 
     for (final fruit in fruits) {
       final fruitCenter = Offset(fruit.position.x, fruit.position.y);
-      if (_checkLineCircleIntersection(p1, p2, fruitCenter, fruit.radius)) {
+      // FIXED: Switched from old radius property to new half-width bounding constraint
+      double calculatedRadius = fruit.size.x / 2;
+      if (_checkLineCircleIntersection(p1, p2, fruitCenter, calculatedRadius)) {
         _sliceFruit(fruit);
       }
     }
@@ -208,42 +297,69 @@ class FruitCutterGame extends FlameGame with PanDetector {
   void _sliceFruit(FruitComponent fruit) {
     fruit.removeFromParent();
 
-    if (fruit.type == FruitType.bomb) {
-      triggerGameOver();
-      return;
+    if (fruit.fruitType == FruitType.bomb) {
+  _playSound('explosion.mp3'); // Insert this at line 301
+  triggerGameOver();
+  return;
+}
+_playSound('slice.mp3');
+
+    // Special Mechanic Activations
+    if (fruit.fruitType == FruitType.banana) {
+      triggerBananaFrenzy();
+    } else if (fruit.fruitType == FruitType.crystalkiwi) {
+      _multiplierTimer = 5.0; // Starts/refreshes the 5 second double points duration
     }
 
-    score += 1;
-    // FIXED: Save the score to device storage immediately when breaking a high score
+    // Point award matrix calculation
+    int basePoints = fruit.pointsValue;
+    // Dynamic rule handling if banana or kiwi are cut (they return 0 base but provide 1 standard point)
+    if (basePoints == 0) basePoints = 1; 
+    
+    score += isDoublePoints ? (basePoints * 2) : basePoints;
+
     if (score > highScore) {
       highScore = score;
       _highScoreText.text = 'Best: $highScore';
-      _saveHighScore(highScore); // Fire storage save routine
+      _saveHighScore(highScore);
     }
     _scoreText.text = 'Score: $score';
 
+    // Particle Splitting Rendering
     add(FruitHalfComponent(
-      type: fruit.type,
+      type: fruit.fruitType,
       isLeftHalf: true,
       position: fruit.position.clone(),
-      velocity: Vector2(fruit.velocity.x - 100, fruit.velocity.y * 0.7),
+      velocity: Vector2(fruit.velocity.x - 120, fruit.velocity.y * 0.7),
       initialAngle: fruit.angle,
     ));
 
     add(FruitHalfComponent(
-      type: fruit.type,
+      type: fruit.fruitType,
       isLeftHalf: false,
       position: fruit.position.clone(),
-      velocity: Vector2(fruit.velocity.x + 100, fruit.velocity.y * 0.7),
+      velocity: Vector2(fruit.velocity.x + 120, fruit.velocity.y * 0.7),
       initialAngle: fruit.angle,
     ));
   }
 
-  @override
+    @override
   void render(Canvas canvas) {
-    canvas.drawColor(const Color(0xFF3E2723), BlendMode.src);
+    // 1. Draw the wooden texture block stretched over the screen bounds
+    if (_backgroundSprite != null) {
+      _backgroundSprite!.render(
+        canvas,
+        position: Vector2.zero(),
+        size: size, // Dynamically tracks active hardware screen resolution
+      );
+    } else {
+      // Fallback solid color block if asset is missing or loading slow
+      canvas.drawColor(const Color(0xFF3E2723), BlendMode.src);
+    }
+    
     super.render(canvas);
 
+    // 2. Draw your responsive neon blade slash trails over the background matrix
     if (!isGameOver && _swipePoints.length > 1) {
       final now = DateTime.now();
       for (int i = 0; i < _swipePoints.length - 1; i++) {

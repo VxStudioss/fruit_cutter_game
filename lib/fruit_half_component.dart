@@ -1,12 +1,10 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flame/components.dart';
 import 'fruit_types.dart';
 
-class FruitHalfComponent extends PositionComponent with HasGameReference {
+class FruitHalfComponent extends SpriteComponent with HasGameReference {
   final FruitType type;
   final bool isLeftHalf;
-  final double radius;
   Vector2 velocity;
   final double gravity = 550.0; 
   double angularVelocity;
@@ -17,14 +15,31 @@ class FruitHalfComponent extends PositionComponent with HasGameReference {
     required Vector2 position,
     required this.velocity,
     required double initialAngle,
-    this.radius = 28.0,
-  }) : angularVelocity = isLeftHalf ? -3.0 : 3.0,
+  }) : angularVelocity = isLeftHalf ? -4.0 : 4.0, // Clean spinning torque push
        super(
          position: position,
-         size: Vector2.all(28.0 * 2),
+         size: Vector2(80, 80), // Aligned with the main 80x80 FruitComponent size
          anchor: Anchor.center,
          angle: initialAngle,
        );
+
+  @override
+  Future<void> onLoad() async {
+    super.onLoad();
+
+    // Map types directly to your crisp 256x256 image assets
+    String spriteName = '';
+    switch (type) {
+      case FruitType.watermelon:  spriteName = 'watermelon.png'; break;
+      case FruitType.apple:       spriteName = 'apple.png'; break;
+      case FruitType.banana:      spriteName = 'banana.png'; break;
+      case FruitType.crystalkiwi:  spriteName = 'crystalkiwi.png'; break;
+      case FruitType.dragonfruit: spriteName = 'dragonfruit.png'; break;
+      case FruitType.bomb:        spriteName = 'bomb.png'; break;
+    }
+
+    sprite = await game.loadSprite(spriteName);
+  }
 
   @override
   void update(double dt) {
@@ -33,6 +48,7 @@ class FruitHalfComponent extends PositionComponent with HasGameReference {
     position += velocity * dt;
     angle += angularVelocity * dt;
 
+    // Wipe object out of memory cleanly when it drops past the floor layout threshold
     if (position.y > game.size.y + size.y) {
       removeFromParent();
     }
@@ -40,68 +56,18 @@ class FruitHalfComponent extends PositionComponent with HasGameReference {
 
   @override
   void render(Canvas canvas) {
-    super.render(canvas);
-    
+    // 1. Trap the drawing bounds to clip half of the texture layout
     canvas.save();
-    canvas.translate(size.x / 2, size.y / 2);
 
+    // Clip half of our 80x80 size frame relative to our center anchor point
     final clipRect = isLeftHalf 
-        ? Rect.fromLTWH(-radius - 10, -radius - 10, radius + 10, (radius * 2) + 20)
-        : Rect.fromLTWH(0, -radius - 10, radius + 10, (radius * 2) + 20);
+        ? Rect.fromLTWH(0, 0, size.x / 2, size.y)
+        : Rect.fromLTWH(size.x / 2, 0, size.x / 2, size.y);
     canvas.clipRect(clipRect);
 
-    final Paint paint = Paint()..style = PaintingStyle.fill;
-
-    switch (type) {
-      case FruitType.watermelon:
-        paint.color = const Color(0xFF2E7D32);
-        canvas.drawCircle(Offset.zero, radius, paint);
-        paint.color = const Color(0xFF81C784);
-        canvas.drawCircle(Offset.zero, radius - 3, paint);
-        paint.color = const Color(0xFFE91E63);
-        canvas.drawCircle(Offset.zero, radius - 6, paint);
-        paint.color = Colors.black87;
-        canvas.drawCircle(const Offset(-6, -4), 1.5, paint);
-        canvas.drawCircle(const Offset(6, -4), 1.5, paint);
-        canvas.drawCircle(const Offset(0, 6), 1.5, paint);
-        break;
-
-      case FruitType.orange:
-        paint.color = const Color(0xFFEF6C00);
-        canvas.drawCircle(Offset.zero, radius, paint);
-        paint.color = const Color(0xFFFFE0B2);
-        canvas.drawCircle(Offset.zero, radius - 3, paint);
-        paint.color = const Color(0xFFFF9800);
-        canvas.drawCircle(Offset.zero, radius - 5, paint);
-        paint.color = const Color(0xFFFFE0B2);
-        paint.style = PaintingStyle.stroke;
-        paint.strokeWidth = 1.2;
-        for (int i = 0; i < 8; i++) {
-          final radians = (i * pi) / 4;
-          canvas.drawLine(Offset.zero, Offset(cos(radians) * (radius - 5), sin(radians) * (radius - 5)), paint);
-        }
-        break;
-
-      case FruitType.apple:
-        paint.color = const Color(0xFFC62828);
-        canvas.drawCircle(Offset.zero, radius, paint);
-        paint.color = const Color(0xFFFFCDD2);
-        canvas.drawCircle(Offset(-8, -8), 4, paint);
-        paint.color = const Color(0xFF5D4037);
-        paint.style = PaintingStyle.stroke;
-        paint.strokeWidth = 2.5;
-        canvas.drawLine(Offset.zero, const Offset(0, -32), paint);
-        break;
-
-      case FruitType.bomb:
-        // FIXED: Handle split bomb visual fragments safely
-        paint.color = const Color(0xFF212121);
-        canvas.drawCircle(Offset.zero, radius, paint);
-        paint.color = const Color(0xFFFF5722);
-        canvas.drawCircle(Offset.zero, 6, paint);
-        break;
-    }
-
+    // 2. Direct Flame to draw the clipped PNG texture into the captured path bounds
+    super.render(canvas);
+    
     canvas.restore();
   }
 }
