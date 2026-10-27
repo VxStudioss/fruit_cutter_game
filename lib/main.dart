@@ -1,26 +1,33 @@
 import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flame/game.dart';
 import 'package:flame/events.dart';
 import 'package:flame/components.dart';
 import 'package:flame/text.dart';
-import 'package:flame/timer.dart' as flame_timer; 
-import 'package:shared_preferences/shared_preferences.dart'; 
+import 'package:flame/timer.dart' as flame_timer;
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'swipe_point.dart';
 import 'fruit_component.dart';
 import 'fruit_half_component.dart';
 import 'fruit_types.dart';
 import 'main_menu_screen.dart';
+
 import 'package:flame_audio/flame_audio.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-  
-  // 1. Ensure your sound files are preloaded in your game initialization
-  await FlameAudio.audioCache.loadAll(['slice.mp3', 'frenzy.mp3', 'explosion.mp3']);
+
+  // Preload sound files into audio cache memory
+  await FlameAudio.audioCache.loadAll([
+    'slice.mp3',
+    'frenzy.mp3',
+    'explosion.mp3',
+  ]);
 
   runApp(
     const MaterialApp(
@@ -32,12 +39,15 @@ void main() async {
 
 class FruitCutterGame extends FlameGame with PanDetector {
   final List<SwipePoint> _swipePoints = [];
-  final Paint _bladePaint = Paint()
-    ..color = const Color(0xFFE0F7FA)
-    ..style = PaintingStyle.stroke
-    ..strokeCap = StrokeCap.round
-    ..strokeJoin = StrokeJoin.round;
-    Sprite? _backgroundSprite;
+  final Paint _bladePaint = Paint();
+  late Sprite _backgroundSprite;
+    bool isSoundEnabled = true;
+  bool isGameInitialized =
+      false; // Prevents update loops from running prematurely
+
+  // Pre-allocated sound pools for instant simultaneous execution
+  late AudioPool _slicePool;
+  late AudioPool _explosionPool;
 
   final int _trailDurationMs = 250;
   final Random _random = Random();
@@ -45,26 +55,46 @@ class FruitCutterGame extends FlameGame with PanDetector {
 
   int score = 0;
   int highScore = 0;
-  int revivesUsed = 0; 
-  final int maxRevives = 3; 
+  int revivesUsed = 0;
+  final int maxRevives = 3;
   bool isGameOver = false;
   double _timeSinceLastBanana = 15.0;
 
   // New Mechanics States
   double _multiplierTimer = 0.0;
   bool get isDoublePoints => _multiplierTimer > 0.0;
-  
+
   late TextComponent _scoreText;
   late TextComponent _highScoreText;
-  late TextComponent _multiplierHUDText; // Visual timer layout for Double Points
+  late TextComponent _multiplierHUDText;
 
     @override
   Future<void> onLoad() async {
-    super.onLoad();
-    // Pre-cache the background image asset cleanly into memory
-    _backgroundSprite = await loadSprite('background.png');
+    await super.onLoad();
+
+    // 1. Initialize instant-fire audio pools
+    _slicePool = await FlameAudio.createPool(
+      'slice.mp3',
+      maxPlayers: 6,
+    );
+    _explosionPool = await FlameAudio.createPool(
+      'explosion.mp3',
+      maxPlayers: 2,
+    );
+
+    // 2. Load your background sprite asset safely
+    _backgroundSprite = await loadSprite('background.png'); 
+
+    // 3. Load settings and high score from storage disk
+    final prefs = await SharedPreferences.getInstance();
+    isSoundEnabled = prefs.getBool('sound_enabled') ?? true;
     await _loadHighScore();
+
+    // 4. Fire up the layout component injectors
     _initGame(fullReset: true);
+
+    // 5. Mark initialization complete so loops can execute
+    isGameInitialized = true;
   }
 
   Future<void> _loadHighScore() async {
@@ -76,11 +106,16 @@ class FruitCutterGame extends FlameGame with PanDetector {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('best_score', newHigh);
   }
-  void _playSound(String filename) async {
-    final prefs = await SharedPreferences.getInstance();
-    bool soundEnabled = prefs.getBool('sound_enabled') ?? true;
-    if (soundEnabled) {
-      await FlameAudio.play(filename);
+
+    void _playSound(String filename) {
+    if (isSoundEnabled) {
+      if (filename == 'slice.mp3') {
+        _slicePool.start(); // Instant execution via pre-allocated channel
+      } else if (filename == 'explosion.mp3') {
+        _explosionPool.start();
+      } else {
+        FlameAudio.play(filename); // Fallback for single non-rapid sounds like frenzy.mp3
+      }
     }
   }
 
@@ -93,9 +128,13 @@ class FruitCutterGame extends FlameGame with PanDetector {
     isGameOver = false;
 
     double spawnInterval = score > 30 ? 1.0 : 1.5;
-    _spawnTimer = flame_timer.Timer(spawnInterval, onTick: _spawnFruitGroup, repeat: true);
+    _spawnTimer = flame_timer.Timer(
+      spawnInterval,
+      onTick: _spawnFruitGroup,
+      repeat: true,
+    );
 
-        // --- SLEEK SCORE PANEL ---
+    // --- SLEEK SCORE PANEL ---
     _scoreText = TextComponent(
       text: 'Score: $score',
       position: Vector2(24, 44),
@@ -119,7 +158,7 @@ class FruitCutterGame extends FlameGame with PanDetector {
       position: Vector2(size.x - 170, 44),
       textRenderer: TextPaint(
         style: const TextStyle(
-          color: Color(0xFF00E676), // Vibrant Neon Green to symbolize high scores!
+          color: Color(0xFF00E676), // Vibrant Neon Green
           fontSize: 24,
           fontWeight: FontWeight.w900,
           letterSpacing: 1.2,
@@ -140,7 +179,9 @@ class FruitCutterGame extends FlameGame with PanDetector {
           color: Color(0xFF00E676),
           fontSize: 18,
           fontWeight: FontWeight.bold,
-          shadows: [Shadow(color: Colors.black, blurRadius: 4, offset: Offset(1, 1))],
+          shadows: [
+            Shadow(color: Colors.black, blurRadius: 4, offset: Offset(1, 1)),
+          ],
         ),
       ),
     );
@@ -157,7 +198,7 @@ class FruitCutterGame extends FlameGame with PanDetector {
 
   void resetGame() {
     overlays.remove('GameOverOverlay');
-    removeAll(children); 
+    removeAll(children);
     _initGame(fullReset: true);
   }
 
@@ -165,8 +206,8 @@ class FruitCutterGame extends FlameGame with PanDetector {
     if (revivesUsed >= maxRevives) return;
     revivesUsed++;
     overlays.remove('GameOverOverlay');
-    removeAll(children); 
-    _initGame(fullReset: false); 
+    removeAll(children);
+    _initGame(fullReset: false);
   }
 
   @override
@@ -179,26 +220,29 @@ class FruitCutterGame extends FlameGame with PanDetector {
 
   void _spawnFruitGroup() {
     if (isGameOver) return;
-    final int count = score > 25 ? (_random.nextInt(3) + 1) : (_random.nextInt(2) + 1);
-    
+    final int count = score > 25
+        ? (_random.nextInt(3) + 1)
+        : (_random.nextInt(2) + 1);
+
     for (int i = 0; i < count; i++) {
       _spawnSingleRandomItem();
     }
   }
 
-    void _spawnSingleRandomItem({double speedModifier = 1.0}) {
+  void _spawnSingleRandomItem({double speedModifier = 1.0}) {
     final bool spawnBomb = _random.nextDouble() < 0.20;
-    
-    final playableTypes = FruitType.values.where((t) => t != FruitType.bomb).toList();
-    FruitType type = spawnBomb ? FruitType.bomb : playableTypes[_random.nextInt(playableTypes.length)];
 
-    // ENFORCE BANANA COOLDOWN
+    final playableTypes = FruitType.values
+        .where((t) => t != FruitType.bomb)
+        .toList();
+    FruitType type = spawnBomb
+        ? FruitType.bomb
+        : playableTypes[_random.nextInt(playableTypes.length)];
+
     if (type == FruitType.banana) {
       if (_timeSinceLastBanana < 15.0) {
-        // Fallback: turn it into a watermelon or apple if it's too early
         type = _random.nextBool() ? FruitType.apple : FruitType.watermelon;
       } else {
-        // Cooldown passed! Reset the tracking clock back to zero
         _timeSinceLastBanana = 0.0;
       }
     }
@@ -206,35 +250,37 @@ class FruitCutterGame extends FlameGame with PanDetector {
     final xPosition = size.x * (0.2 + _random.nextDouble() * 0.6);
     final yPosition = size.y + 40;
     final double vx = ((_random.nextDouble() * 140) - 70) * speedModifier;
-    final double vy = -(_random.nextDouble() * 150 + 680) * speedModifier; 
+    final double vy = -(_random.nextDouble() * 150 + 680) * speedModifier;
 
-    add(FruitComponent(
-      fruitType: type, 
-      position: Vector2(xPosition, yPosition), 
-      initialVelocity: Vector2(vx, vy),
-    ));
+    add(
+      FruitComponent(
+        fruitType: type,
+        position: Vector2(xPosition, yPosition),
+        initialVelocity: Vector2(vx, vy),
+      ),
+    );
   }
 
-  // Triggered via slicing a Banana
   void triggerBananaFrenzy() {
-  _playSound('frenzy.mp3'); // Add this line right here!
-  int waveCount = 5;
-  
-  for (int i = 0; i < waveCount; i++) {
-    Future.delayed(Duration(milliseconds: i * 150), () { // Made delay slightly longer so they don't crowd the screen
-      if (!isGameOver) {
-        _spawnSingleRandomItem(speedModifier: 0.85);
-      }
-    });
-  }
-}
+    _playSound('frenzy.mp3');
+    int waveCount = 5;
 
-     @override
+    for (int i = 0; i < waveCount; i++) {
+      Future.delayed(Duration(milliseconds: i * 150), () {
+        if (!isGameOver) {
+          _spawnSingleRandomItem(speedModifier: 0.85);
+        }
+      });
+    }
+  }
+
+  @override
   void update(double dt) {
+    // Safety guard to block the update cycle until components are constructed
+    if (!isGameInitialized) return;
+
     super.update(dt);
     _spawnTimer.update(dt);
-    
-    // This line ticks the timer forward and uses the field
     _timeSinceLastBanana += dt;
 
     if (_multiplierTimer > 0.0) {
@@ -242,12 +288,16 @@ class FruitCutterGame extends FlameGame with PanDetector {
       if (_multiplierTimer <= 0.0) {
         _multiplierHUDText.text = '';
       } else {
-        _multiplierHUDText.text = '2X POINTS: ${_multiplierTimer.toStringAsFixed(1)}s';
+        _multiplierHUDText.text =
+            '2X POINTS: ${_multiplierTimer.toStringAsFixed(1)}s';
       }
     }
 
     final now = DateTime.now();
-    _swipePoints.removeWhere((point) => now.difference(point.timestamp).inMilliseconds > _trailDurationMs);
+    _swipePoints.removeWhere(
+      (point) =>
+          now.difference(point.timestamp).inMilliseconds > _trailDurationMs,
+    );
   }
 
   @override
@@ -265,7 +315,12 @@ class FruitCutterGame extends FlameGame with PanDetector {
   }
 
   void _addPoint(Vector2 globalPosition) {
-    _swipePoints.add(SwipePoint(position: Offset(globalPosition.x, globalPosition.y), timestamp: DateTime.now()));
+    _swipePoints.add(
+      SwipePoint(
+        position: Offset(globalPosition.x, globalPosition.y),
+        timestamp: DateTime.now(),
+      ),
+    );
   }
 
   void _checkCollisions() {
@@ -276,7 +331,6 @@ class FruitCutterGame extends FlameGame with PanDetector {
 
     for (final fruit in fruits) {
       final fruitCenter = Offset(fruit.position.x, fruit.position.y);
-      // FIXED: Switched from old radius property to new half-width bounding constraint
       double calculatedRadius = fruit.size.x / 2;
       if (_checkLineCircleIntersection(p1, p2, fruitCenter, calculatedRadius)) {
         _sliceFruit(fruit);
@@ -284,13 +338,25 @@ class FruitCutterGame extends FlameGame with PanDetector {
     }
   }
 
-  bool _checkLineCircleIntersection(Offset p1, Offset p2, Offset center, double radius) {
-    final double l2 = (p1.dx - p2.dx) * (p1.dx - p2.dx) + (p1.dy - p2.dy) * (p1.dy - p2.dy);
+  bool _checkLineCircleIntersection(
+    Offset p1,
+    Offset p2,
+    Offset center,
+    double radius,
+  ) {
+    final double l2 =
+        (p1.dx - p2.dx) * (p1.dx - p2.dx) + (p1.dy - p2.dy) * (p1.dy - p2.dy);
     if (l2 == 0) return (p1 - center).distance <= radius;
 
-    double t = ((center.dx - p1.dx) * (p2.dx - p1.dx) + (center.dy - p1.dy) * (p2.dy - p1.dy)) / l2;
+    double t =
+        ((center.dx - p1.dx) * (p2.dx - p1.dx) +
+            (center.dy - p1.dy) * (p2.dy - p1.dy)) /
+        l2;
     t = t.clamp(0.0, 1.0);
-    final Offset projection = Offset(p1.dx + t * (p2.dx - p1.dx), p1.dy + t * (p2.dy - p1.dy));
+    final Offset projection = Offset(
+      p1.dx + t * (p2.dx - p1.dx),
+      p1.dy + t * (p2.dy - p1.dy),
+    );
     return (projection - center).distance <= radius;
   }
 
@@ -298,24 +364,21 @@ class FruitCutterGame extends FlameGame with PanDetector {
     fruit.removeFromParent();
 
     if (fruit.fruitType == FruitType.bomb) {
-  _playSound('explosion.mp3'); // Insert this at line 301
-  triggerGameOver();
-  return;
-}
-_playSound('slice.mp3');
+      _playSound('explosion.mp3');
+      triggerGameOver();
+      return;
+    }
+    _playSound('slice.mp3');
 
-    // Special Mechanic Activations
     if (fruit.fruitType == FruitType.banana) {
       triggerBananaFrenzy();
     } else if (fruit.fruitType == FruitType.crystalkiwi) {
-      _multiplierTimer = 5.0; // Starts/refreshes the 5 second double points duration
+      _multiplierTimer = 5.0;
     }
 
-    // Point award matrix calculation
     int basePoints = fruit.pointsValue;
-    // Dynamic rule handling if banana or kiwi are cut (they return 0 base but provide 1 standard point)
-    if (basePoints == 0) basePoints = 1; 
-    
+    if (basePoints == 0) basePoints = 1;
+
     score += isDoublePoints ? (basePoints * 2) : basePoints;
 
     if (score > highScore) {
@@ -324,42 +387,32 @@ _playSound('slice.mp3');
       _saveHighScore(highScore);
     }
     _scoreText.text = 'Score: $score';
-
-    // Particle Splitting Rendering
-    add(FruitHalfComponent(
-      type: fruit.fruitType,
-      isLeftHalf: true,
-      position: fruit.position.clone(),
-      velocity: Vector2(fruit.velocity.x - 120, fruit.velocity.y * 0.7),
-      initialAngle: fruit.angle,
-    ));
-
-    add(FruitHalfComponent(
-      type: fruit.fruitType,
-      isLeftHalf: false,
-      position: fruit.position.clone(),
-      velocity: Vector2(fruit.velocity.x + 120, fruit.velocity.y * 0.7),
-      initialAngle: fruit.angle,
-    ));
+    add(
+      FruitHalfComponent(
+        type: fruit.fruitType,
+        isLeftHalf: true,
+        position: fruit.position.clone(),
+        velocity: Vector2(fruit.velocity.x - 120, fruit.velocity.y * 0.7),
+        initialAngle: fruit.angle,
+      ),
+    );
+    add(
+      FruitHalfComponent(
+        type: fruit.fruitType,
+        isLeftHalf: false,
+        position: fruit.position.clone(),
+        velocity: Vector2(fruit.velocity.x + 120, fruit.velocity.y * 0.7),
+        initialAngle: fruit.angle,
+      ),
+    );
   }
 
-    @override
+  @override
   void render(Canvas canvas) {
-    // 1. Draw the wooden texture block stretched over the screen bounds
-    if (_backgroundSprite != null) {
-      _backgroundSprite!.render(
-        canvas,
-        position: Vector2.zero(),
-        size: size, // Dynamically tracks active hardware screen resolution
-      );
-    } else {
-      // Fallback solid color block if asset is missing or loading slow
-      canvas.drawColor(const Color(0xFF3E2723), BlendMode.src);
-    }
-    
+    // Safety guard to prevent rendering background assets before initialization complete
+    if (!isGameInitialized) return;
+    _backgroundSprite.render(canvas, position: Vector2.zero(), size: size);
     super.render(canvas);
-
-    // 2. Draw your responsive neon blade slash trails over the background matrix
     if (!isGameOver && _swipePoints.length > 1) {
       final now = DateTime.now();
       for (int i = 0; i < _swipePoints.length - 1; i++) {
@@ -367,9 +420,9 @@ _playSound('slice.mp3');
         final p2 = _swipePoints[i + 1];
         final ageMs = now.difference(p1.timestamp).inMilliseconds;
         final lifeRatio = 1.0 - (ageMs / _trailDurationMs).clamp(0.0, 1.0);
-
         _bladePaint.strokeWidth = 2.0 + (6.0 * lifeRatio);
-        _bladePaint.color = const Color(0xFFE0F7FA).withValues(alpha: lifeRatio);
+        _bladePaint.color = const Color(0xFFE0F7FA)
+            .withValues(alpha: lifeRatio);
         canvas.drawLine(p1.position, p2.position, _bladePaint);
       }
     }
